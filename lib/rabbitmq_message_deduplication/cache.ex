@@ -19,6 +19,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
   alias :os, as: Os
   alias :erlang, as: Erlang
   alias :mnesia, as: Mnesia
+  alias :mrdb, as: Mrdb
   alias RabbitMQMessageDeduplication.Common, as: Common
 
   @options [:size, :ttl, :distributed, :limit, :default_ttl]
@@ -31,8 +32,6 @@ defmodule RabbitMQMessageDeduplication.Cache do
   """
   @spec create(atom, boolean, list) :: :ok | { :error, any }
   def create(cache, distributed, options) do
-    Mnesia.start()
-
     case cache_create(cache, distributed, options) do
       {_, reason} -> {:error, reason}
       result -> result
@@ -53,18 +52,14 @@ defmodule RabbitMQMessageDeduplication.Cache do
       if cache_member?(cache, entry) do
         :exists
       else
-        if cache_full?(cache) do
-          cache_delete_first(cache)
-        end
-
-        Mnesia.write({cache, entry, entry_expiration(cache, ttl)})
-
+        Mrdb.insert(cache, {cache, entry, entry_expiration(cache, ttl)})
         :inserted
       end
     end
 
-    case Mnesia.transaction(function) do
-      {:atomic, result} -> {:ok, result}
+    case Mrdb.activity(:tx, :rocksdb_copies, function) do
+      :exists -> {:ok, :exists}
+      :inserted -> {:ok, :inserted}
       {:aborted, reason} -> {:error, reason}
     end
   end
@@ -107,21 +102,12 @@ defmodule RabbitMQMessageDeduplication.Cache do
   """
   @spec delete_expired_entries(atom) :: :ok | { :error, any }
   def delete_expired_entries(cache) do
-    select = fn ->
-      Mnesia.select(cache, [{{cache, :"$1", :"$2"},
-                             [{:>, Os.system_time(:millisecond), :"$2"}],
-                             [:"$1"]}])
+    case Mrdb.select(cache, [{{cache, :"$1", :"$2"},
+                              [{:>, Os.system_time(:millisecond), :"$2"}],
+                              [:"$1"]}]) do
+      expired -> Enum.each(expired, fn e -> Mrdb.delete(cache, e) end)
     end
-
-    delete = fn x -> Enum.each(x, fn e -> Mnesia.delete({cache, e}) end) end
-
-    case Mnesia.transaction(select) do
-      {:atomic, expired} -> case Mnesia.transaction(delete, [expired], 1) do
-                              {:atomic, :ok} -> :ok
-                              {:aborted, reason} -> {:error, reason}
-                            end
-      {:aborted, {:no_exists, _}} -> {:error, :no_cache}
-    end
+    :ok
   end
 
   @doc """
@@ -129,11 +115,10 @@ defmodule RabbitMQMessageDeduplication.Cache do
   """
   @spec info(atom) :: list
   def info(cache) do
-    with entries when is_integer(entries) <- Mnesia.table_info(cache, :size),
-         words when is_integer(words) <- Mnesia.table_info(cache, :memory)
+    with entries when is_integer(entries) <- Mrdb.read_info(cache, :size),
+         bytes when is_integer(bytes) <- Mrdb.read_info(cache, :memory)
     do
       {_, nodes} = cache_layout(cache)
-      bytes = words * Erlang.system_info(:wordsize)
 
       case cache_property(cache, :size) do
         nil -> [entries: entries, bytes: bytes, nodes: nodes]
@@ -167,17 +152,16 @@ defmodule RabbitMQMessageDeduplication.Cache do
 
   # Mnesia cache table creation.
   defp cache_create(cache, distributed, options) do
-    persistence = case Keyword.get(options, :persistence) do
-                    :disk -> :disc_copies
-                    :memory -> :ram_copies
-                  end
-    replicas = if distributed, do: cache_replicas(), else: [Node.self()]
+    persistence = :rocksdb_copies
+    replicas = [Node.self()]
     options = [{:attributes, [:entry, :expiration]},
                {persistence, replicas},
                {:index, [:expiration]},
                {:user_properties, [{:distributed, distributed},
                                    {:size, Keyword.get(options, :size)},
-                                   {:ttl, Keyword.get(options, :ttl)}]}]
+                                   {:ttl, Keyword.get(options, :ttl)},
+                                   {:rocksdb_opts, [{:max_open_files, 256*1024},
+                                                    {:block_size, 128*1024*1024}]}]}]
 
     case Mnesia.create_table(cache, options) do
       {:atomic, :ok} ->
@@ -197,30 +181,13 @@ defmodule RabbitMQMessageDeduplication.Cache do
     end
   end
 
-  # Lookup the entry within the cache, deletes the entry if expired
+  # Lookup the entry within the cache.
   # Must be included within transaction.
   defp cache_member?(cache, entry) do
-    case cache |> Mnesia.read(entry) |> List.keyfind(entry, 1) do
-      {_, _, expiration} -> if expiration <= Os.system_time(:millisecond) do
-                              Mnesia.delete({cache, entry})
-                              false
-                            else
-                              true
-                            end
-      nil -> false
+    case Mrdb.read(cache, entry) do
+      [_ | _] -> true
+      [] -> false
     end
-  end
-
-  # Delete the first element from the cache.
-  # As the Mnesia Set is not ordered, the first element is random.
-  # Must be included within transaction.
-  defp cache_delete_first(cache) do
-    Mnesia.delete({cache, Mnesia.first(cache)})
-  end
-
-  # True if the cache is full, false otherwise.
-  defp cache_full?(cache) do
-    Mnesia.table_info(cache, :size) >= cache_property(cache, :size)
   end
 
   # Calculate the expiration given a TTL or the cache default TTL
@@ -272,9 +239,8 @@ defmodule RabbitMQMessageDeduplication.Cache do
 
   # Returns a tuple {persistence, nodes}
   defp cache_layout(cache) do
-    case Mnesia.table_info(cache, :ram_copies) do
-      [] -> {:disc_copies, Mnesia.table_info(cache, :disc_copies)}
-      nodes -> {:ram_copies, nodes}
+    case Mnesia.table_info(cache, :rocksdb_copies) do
+      nodes -> {:rocksdb_copies, nodes}
     end
   end
 

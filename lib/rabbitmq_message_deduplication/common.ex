@@ -118,7 +118,7 @@ defmodule RabbitMQMessageDeduplication.Common do
   end
 
   def cleanup_period() do
-    Application.get_env(appname(), :cache_cleanup_period, Timer.seconds(3))
+    Application.get_env(appname(), :cache_cleanup_period, Timer.minutes(60))
   end
 
   defp sanitize_string(string) do

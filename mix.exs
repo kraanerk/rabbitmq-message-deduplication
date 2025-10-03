@@ -29,7 +29,8 @@ defmodule RabbitMQ.MessageDeduplicationPlugin.Mixfile do
 
   defp deps() do
     [
-      {:mix_task_archive_deps, github: "rabbitmq/mix_task_archive_deps", runtime: false}
+      {:mix_task_archive_deps, github: "rabbitmq/mix_task_archive_deps", runtime: false},
+      {:mnesia_rocksdb, github: "aeternity/mnesia_rocksdb", runtime: true}
     ]
   end
 

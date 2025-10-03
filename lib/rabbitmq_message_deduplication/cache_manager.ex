@@ -16,6 +16,8 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
 
   alias :timer, as: Timer
   alias :mnesia, as: Mnesia
+  alias :mnesia_rocksdb, as: MnesiaRocksdb
+  alias :mnesia_rocksdb_admin, as: MrdbAdmin
   alias RabbitMQMessageDeduplication.Cache, as: Cache
   alias RabbitMQMessageDeduplication.Common, as: Common
 
@@ -87,6 +89,8 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
   # Create the cache table and start the cleanup routine.
   def init(state) do
     Mnesia.start()
+    MnesiaRocksdb.register()
+    MrdbAdmin.set_and_cache_env(:mnesia_compatible_aborts, true)
 
     with :ok <- mnesia_create(Mnesia.create_table(caches(), [])),
          :ok <- mnesia_create(Mnesia.add_table_copy(caches(), node(), :ram_copies)),
