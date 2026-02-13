@@ -1,4 +1,4 @@
-FROM ubuntu:24.04 as build-base
+FROM ubuntu:24.04 AS build-base
 
 ARG BUILDKIT_SBOM_SCAN_STAGE=true
 
@@ -11,7 +11,7 @@ RUN set -eux; \
 		libncurses5-dev \
 		wget
 
-FROM build-base as openssl-builder
+FROM build-base AS openssl-builder
 
 ARG BUILDKIT_SBOM_SCAN_STAGE=true
 
@@ -104,7 +104,7 @@ RUN set -eux; \
 # smoke test
 RUN $OPENSSL_INSTALL_PATH_PREFIX/bin/openssl version
 
-FROM openssl-builder
+FROM openssl-builder AS rabbitmq-builder
 
 ARG BUILDKIT_SBOM_SCAN_STAGE=true
 ARG DEBIAN_FRONTEND=noninteractive

@@ -48,6 +48,22 @@ defmodule RabbitMQMessageDeduplication.Cache do
   @spec insert(atom, any, integer | nil) ::
     { :ok, :inserted | :exists } | { :error, any }
   def insert(cache, entry, ttl \\ nil) do
+    result = local_insert(cache, entry, ttl)
+
+    # Broadcast to other nodes if distributed
+    if result == {:ok, :inserted} and cache_property(cache, :distributed) do
+      broadcast_insert(cache, entry, ttl)
+    end
+
+    result
+  end
+
+  @doc """
+  Insert the given entry into the local cache only (no broadcast).
+  """
+  @spec local_insert(atom, any, integer | nil) ::
+    { :ok, :inserted | :exists } | { :error, any }
+  def local_insert(cache, entry, ttl \\ nil) do
     function = fn ->
       if cache_member?(cache, entry) do
         :exists
@@ -69,6 +85,21 @@ defmodule RabbitMQMessageDeduplication.Cache do
   """
   @spec delete(atom, any) :: :ok | { :error, any }
   def delete(cache, entry) do
+    result = local_delete(cache, entry)
+
+    # Broadcast to other nodes if distributed
+    if result == :ok and cache_property(cache, :distributed) do
+      broadcast_delete(cache, entry)
+    end
+
+    result
+  end
+
+  @doc """
+  Delete the given entry from the local cache only (no broadcast).
+  """
+  @spec local_delete(atom, any) :: :ok | { :error, any }
+  def local_delete(cache, entry) do
     case Mnesia.transaction(fn -> Mnesia.delete({cache, entry}) end) do
       {:atomic, :ok} -> :ok
       {:aborted, reason} -> {:error, reason}
@@ -153,6 +184,8 @@ defmodule RabbitMQMessageDeduplication.Cache do
   # Mnesia cache table creation.
   defp cache_create(cache, distributed, options) do
     persistence = :rocksdb_copies
+    # RocksDB tables MUST be created locally on each node
+    # They cannot be created with a replicas list
     replicas = [Node.self()]
     options = [{:attributes, [:entry, :expiration]},
                {persistence, replicas},
@@ -218,14 +251,53 @@ defmodule RabbitMQMessageDeduplication.Cache do
   defp cache_rebalance(cache) do
     {storage_type, cache_nodes} = cache_layout(cache)
 
-    for node <- cache_replicas(cache_nodes) do
-      case Mnesia.add_table_copy(cache, node, storage_type) do
-        {:atomic, :ok} ->
-          wait_for_cache(cache)
-        {:aborted, reason} when elem(reason, 0) == :already_exists ->
-          maybe_reconfigure(cache, true)
+    # RocksDB tables cannot be replicated using add_table_copy
+    # Each node creates its own local copy when the exchange is created on that node
+    # Rebalancing is a no-op for RocksDB-based caches
+    if storage_type == :rocksdb_copies do
+      :ok
+    else
+      for node <- cache_replicas(cache_nodes) do
+        case Mnesia.add_table_copy(cache, node, storage_type) do
+          {:atomic, :ok} ->
+            wait_for_cache(cache)
+          {:aborted, reason} when elem(reason, 0) == :already_exists ->
+            maybe_reconfigure(cache, true)
+        end
       end
     end
+  end
+
+  # Broadcast an insert operation to other nodes in the cluster
+  defp broadcast_insert(cache, entry, ttl) do
+    {storage_type, cache_nodes} = cache_layout(cache)
+
+    if storage_type == :rocksdb_copies do
+      # Get other nodes that should have this cache
+      other_nodes = cache_nodes -- [Node.self()]
+
+      for node <- other_nodes do
+        :rpc.cast(node, __MODULE__, :local_insert, [cache, entry, ttl])
+      end
+    end
+
+    :ok
+  end
+
+  # Broadcast a delete operation to other nodes in the cluster
+  defp broadcast_delete(cache, entry) do
+    {storage_type, cache_nodes} = cache_layout(cache)
+
+    if storage_type == :rocksdb_copies do
+      # Get other nodes that should have this cache
+      other_nodes = cache_nodes -- [Node.self()]
+
+      for node <- other_nodes do
+        :rpc.cast(node, __MODULE__, :local_delete, [cache, entry])
+      end
+    end
+
+    :ok
   end
 
   # List the nodes on which to create the cache replicas.
