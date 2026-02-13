@@ -269,20 +269,57 @@ defmodule RabbitMQMessageDeduplication.Cache do
   defp cache_rebalance(cache) do
     {storage_type, cache_nodes} = cache_layout(cache)
 
-    # RocksDB tables cannot be replicated using add_table_copy
-    # Each node creates its own local copy when the exchange is created on that node
-    # Rebalancing is a no-op for RocksDB-based caches
+    RabbitLog.info("Rebalancing cache ~p: storage_type=~p, existing_nodes=~p~n",
+                   [cache, storage_type, cache_nodes])
+
     if storage_type == :rocksdb_copies do
-      :ok
+      # For RocksDB tables, we need to create independent copies on each node
+      # Get the cache configuration from user properties
+      distributed = cache_property(cache, :distributed)
+      size = cache_property(cache, :size)
+      ttl = cache_property(cache, :ttl)
+
+      target_nodes = cache_replicas(cache_nodes)
+      RabbitLog.info("Target nodes for cache ~p: ~p~n", [cache, target_nodes])
+
+      for node <- target_nodes do
+        if node not in cache_nodes do
+          RabbitLog.info("Creating cache ~p on remote node ~p~n", [cache, node])
+          # Call cache creation on the remote node via RPC
+          :rpc.call(node, __MODULE__, :create_local_cache, [cache, distributed, [size: size, ttl: ttl]])
+        end
+      end
     else
       for node <- cache_replicas(cache_nodes) do
         case Mnesia.add_table_copy(cache, node, storage_type) do
           {:atomic, :ok} ->
             wait_for_cache(cache)
           {:aborted, reason} when elem(reason, 0) == :already_exists ->
-            maybe_reconfigure(cache, true)
+            maybe_reconfigure(cache, distributed)
         end
       end
+    end
+  end
+
+  @doc """
+  Create a local RocksDB cache table on the current node.
+  This is meant to be called via RPC from other nodes.
+  """
+  @spec create_local_cache(atom, boolean, list) :: :ok | {:error, any}
+  def create_local_cache(cache, distributed, options) do
+    RabbitLog.info("Creating local cache ~p on node ~p (distributed: ~p)~n",
+                   [cache, Node.self(), distributed])
+
+    # Filter out nil values from options
+    options = Enum.filter(options, fn {_k, v} -> v != nil end)
+
+    case cache_create(cache, distributed, options) do
+      {:error, reason} ->
+        RabbitLog.warning("Failed to create local cache ~p: ~p~n", [cache, reason])
+        {:error, reason}
+      result ->
+        RabbitLog.info("Successfully created local cache ~p on node ~p~n", [cache, Node.self()])
+        result
     end
   end
 
