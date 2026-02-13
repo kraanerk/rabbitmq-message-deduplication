@@ -272,10 +272,11 @@ defmodule RabbitMQMessageDeduplication.Cache do
     RabbitLog.info("Rebalancing cache ~p: storage_type=~p, existing_nodes=~p~n",
                    [cache, storage_type, cache_nodes])
 
+    distributed = cache_property(cache, :distributed)
+
     if storage_type == :rocksdb_copies do
       # For RocksDB tables, we need to create independent copies on each node
       # Get the cache configuration from user properties
-      distributed = cache_property(cache, :distributed)
       size = cache_property(cache, :size)
       ttl = cache_property(cache, :ttl)
 
