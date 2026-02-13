@@ -337,7 +337,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
       target_nodes = cache_replicas(cache_nodes)
       other_nodes = target_nodes -- [Node.self()]
 
-      RabbitLog.info("Broadcasting to target nodes: ~p~n", [other_nodes])
+      RabbitLog.info("Broadcasting insert to other nodes: ~p~n", [other_nodes])
 
       for node <- other_nodes do
         RabbitLog.info("Casting insert to node ~p for cache ~p~n", [node, cache])
@@ -360,7 +360,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
       target_nodes = cache_replicas(cache_nodes)
       other_nodes = target_nodes -- [Node.self()]
 
-      RabbitLog.info("Broadcasting delete to target nodes: ~p~n", [other_nodes])
+      RabbitLog.info("Broadcasting delete to other nodes: ~p~n", [other_nodes])
 
       for node <- other_nodes do
         RabbitLog.info("Casting delete to node ~p for cache ~p~n", [node, cache])
