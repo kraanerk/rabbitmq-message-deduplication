@@ -20,6 +20,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
   alias :erlang, as: Erlang
   alias :mnesia, as: Mnesia
   alias :mrdb, as: Mrdb
+  alias :rabbit_log, as: RabbitLog
   alias RabbitMQMessageDeduplication.Common, as: Common
 
   @options [:size, :ttl, :distributed, :limit, :default_ttl]
