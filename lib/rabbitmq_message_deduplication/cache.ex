@@ -327,17 +327,19 @@ defmodule RabbitMQMessageDeduplication.Cache do
   defp broadcast_insert(cache, entry, ttl) do
     {storage_type, cache_nodes} = cache_layout(cache)
 
-    RabbitLog.info("Broadcast insert: storage_type=~p, cache_nodes=~p",
-                    [storage_type, cache_nodes])
+    RabbitLog.info("Broadcast insert: storage_type=~p, cache_nodes=~p~n",
+                   [storage_type, cache_nodes])
 
     if storage_type == :rocksdb_copies do
-      # Get other nodes that should have this cache
-      other_nodes = cache_nodes -- [Node.self()]
+      # For RocksDB distributed caches, broadcast to all cluster nodes
+      # not just nodes that currently have the table
+      target_nodes = cache_replicas(cache_nodes)
+      other_nodes = target_nodes -- [Node.self()]
 
-      RabbitLog.info("Broadcasting to other nodes: ~p", [other_nodes])
+      RabbitLog.info("Broadcasting to target nodes: ~p~n", [other_nodes])
 
       for node <- other_nodes do
-        RabbitLog.info("Casting insert to node ~p for cache ~p", [node, cache])
+        RabbitLog.info("Casting insert to node ~p for cache ~p~n", [node, cache])
         :rpc.cast(node, __MODULE__, :local_insert, [cache, entry, ttl])
       end
     end
@@ -349,11 +351,18 @@ defmodule RabbitMQMessageDeduplication.Cache do
   defp broadcast_delete(cache, entry) do
     {storage_type, cache_nodes} = cache_layout(cache)
 
+    RabbitLog.info("Broadcast delete: storage_type=~p, cache_nodes=~p~n",
+                   [storage_type, cache_nodes])
+
     if storage_type == :rocksdb_copies do
-      # Get other nodes that should have this cache
-      other_nodes = cache_nodes -- [Node.self()]
+      # For RocksDB distributed caches, broadcast to all cluster nodes
+      target_nodes = cache_replicas(cache_nodes)
+      other_nodes = target_nodes -- [Node.self()]
+
+      RabbitLog.info("Broadcasting delete to target nodes: ~p~n", [other_nodes])
 
       for node <- other_nodes do
+        RabbitLog.info("Casting delete to node ~p for cache ~p~n", [node, cache])
         :rpc.cast(node, __MODULE__, :local_delete, [cache, entry])
       end
     end
@@ -362,12 +371,12 @@ defmodule RabbitMQMessageDeduplication.Cache do
   end
 
   # List the nodes on which to create the cache replicas.
-  # Distributed caches are replicated on two-thirds of the cluster nodes.
+  # For RocksDB-based distributed caches, replicate on all cluster nodes.
   defp cache_replicas(cache_nodes \\ []) do
     cluster_nodes = Mnesia.system_info(:running_db_nodes)
-    replica_number = floor((length(cluster_nodes) * 2) / 3)
 
-    Enum.take(cache_nodes ++ (cluster_nodes -- cache_nodes), replica_number)
+    # Return all cluster nodes, prioritizing existing cache nodes first
+    cache_nodes ++ (cluster_nodes -- cache_nodes)
   end
 
   # Returns a tuple {persistence, nodes}
