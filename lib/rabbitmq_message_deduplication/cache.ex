@@ -99,32 +99,6 @@ defmodule RabbitMQMessageDeduplication.Cache do
   end
 
   @doc """
-  Delete the given entry from the cache.
-  """
-  @spec delete(atom, any) :: :ok | { :error, any }
-  def delete(cache, entry) do
-    result = local_delete(cache, entry)
-
-    # Broadcast to other nodes if distributed
-    if result == :ok and cache_property(cache, :distributed) do
-      broadcast_delete(cache, entry)
-    end
-
-    result
-  end
-
-  @doc """
-  Delete the given entry from the local cache only (no broadcast).
-  """
-  @spec local_delete(atom, any) :: :ok | { :error, any }
-  def local_delete(cache, entry) do
-    case Mnesia.transaction(fn -> Mnesia.delete({cache, entry}) end) do
-      {:atomic, :ok} -> :ok
-      {:aborted, reason} -> {:error, reason}
-    end
-  end
-
-  @doc """
   Flush the cache content.
   """
   @spec flush(atom) :: :ok | { :error, any }
@@ -342,29 +316,6 @@ defmodule RabbitMQMessageDeduplication.Cache do
       for node <- other_nodes do
         RabbitLog.info("Casting insert to node ~p for cache ~p~n", [node, cache])
         :rpc.cast(node, __MODULE__, :local_insert, [cache, entry, ttl])
-      end
-    end
-
-    :ok
-  end
-
-  # Broadcast a delete operation to other nodes in the cluster
-  defp broadcast_delete(cache, entry) do
-    {storage_type, cache_nodes} = cache_layout(cache)
-
-    RabbitLog.info("Broadcast delete: storage_type=~p, cache_nodes=~p~n",
-                   [storage_type, cache_nodes])
-
-    if storage_type == :rocksdb_copies do
-      # For RocksDB distributed caches, broadcast to all cluster nodes
-      target_nodes = cache_replicas(cache_nodes)
-      other_nodes = target_nodes -- [Node.self()]
-
-      RabbitLog.info("Broadcasting delete to other nodes: ~p~n", [other_nodes])
-
-      for node <- other_nodes do
-        RabbitLog.info("Casting delete to node ~p for cache ~p~n", [node, cache])
-        :rpc.cast(node, __MODULE__, :local_delete, [cache, entry])
       end
     end
 
