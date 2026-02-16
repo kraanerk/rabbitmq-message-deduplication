@@ -325,7 +325,8 @@ defmodule RabbitMQMessageDeduplication.Cache do
   # List the nodes on which to create the cache replicas.
   # For RocksDB-based distributed caches, replicate on all cluster nodes.
   defp cache_replicas(cache_nodes \\ []) do
-    cluster_nodes = Mnesia.system_info(:running_db_nodes)
+    # Use RabbitMQ's cluster nodes, not Mnesia's, since RabbitMQ 4.x uses Khepri by default
+    cluster_nodes = :rabbit_nodes.list_running()
 
     RabbitLog.info("cache_replicas: cache_nodes=~p, cluster_nodes=~p~n",
                    [cache_nodes, cluster_nodes])
