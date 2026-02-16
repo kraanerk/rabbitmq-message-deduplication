@@ -327,8 +327,15 @@ defmodule RabbitMQMessageDeduplication.Cache do
   defp cache_replicas(cache_nodes \\ []) do
     cluster_nodes = Mnesia.system_info(:running_db_nodes)
 
+    RabbitLog.info("cache_replicas: cache_nodes=~p, cluster_nodes=~p~n",
+                   [cache_nodes, cluster_nodes])
+
     # Return all cluster nodes, prioritizing existing cache nodes first
-    cache_nodes ++ (cluster_nodes -- cache_nodes)
+    result = cache_nodes ++ (cluster_nodes -- cache_nodes)
+
+    RabbitLog.info("cache_replicas result: ~p~n", [result])
+
+    result
   end
 
   # Returns a tuple {persistence, nodes}
