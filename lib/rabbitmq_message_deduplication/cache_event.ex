@@ -11,6 +11,16 @@ defmodule RabbitMQMessageDeduplication.CacheEvent do
 
   @behaviour :gen_event
 
+  Module.register_attribute(__MODULE__,
+    :rabbit_boot_step,
+    accumulate: true, persist: true)
+
+  @rabbit_boot_step {__MODULE__,
+                     [{:description, "message deduplication cache event handler"},
+                      {:mfa, {__MODULE__, :add_handler, []}},
+                      {:requires, :kernel_ready},
+                      {:enables, :core_initialized}]}
+
   @spec add_handler() :: :ok | {:error, any}
   def add_handler() do
     GenEvent.add_handler(:rabbit_event, __MODULE__, [])
