@@ -35,8 +35,8 @@ defmodule RabbitMQMessageDeduplication.CacheEvent do
   def init(_), do: {:ok, []}
 
   @impl :gen_event
-  def handle_event({:event, :node_up, info, timestamp}, state) do
-    send(CacheManager, {:event, :node_up, info, timestamp})
+  def handle_event({:event, :node_added, info, timestamp}, state) do
+    send(CacheManager, {:event, :node_added, info, timestamp})
     {:ok, state}
   end
 

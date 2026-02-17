@@ -157,8 +157,8 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
     {:noreply, state}
   end
 
-  # On RabbitMQ node addition (handles Khepri-based clusters)
-  def handle_info({:event, :node_up, info, _timestamp}, state) do
+  # On RabbitMQ node addition (handles both Mnesia and Khepri-based clusters)
+  def handle_info({:event, :node_added, info, _timestamp}, state) do
     new_node = Keyword.get(info, :node)
     :rabbit_log.info("RabbitMQ node ~p joined cluster, rebalancing and syncing caches~n", [new_node])
 
