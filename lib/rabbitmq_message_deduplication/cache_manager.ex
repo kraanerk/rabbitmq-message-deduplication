@@ -210,13 +210,14 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
 
   # Sync cache entries in batches using continuation-based iteration
   defp sync_cache_entries_batched(cache, target_node) do
-    batch_size = 1000
-    match_spec = [{{:"$1", :"$2", :"$3"}, [], [:"$$"]}]
+    batch_size = 10000
+    # Match spec to return all cache entries: {cache_name, key, expiration}
+    match_spec = [{{cache, :"$1", :"$2"}, [], [{{:"$1", :"$2"}}]}]
 
     # Start the select with a limit
-    case :mrdb.select(cache, match_spec, batch_size, :read) do
+    case :mrdb.select(cache, match_spec, batch_size) do
       {entries, continuation} ->
-        count = process_and_sync_batch(entries, cache, target_node, batch_size)
+        count = process_and_sync_batch(entries, cache, target_node, 0)
         sync_continuation(continuation, cache, target_node, count)
 
       :"$end_of_table" ->
@@ -255,7 +256,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
   defp process_and_sync_batch(entries, cache, target_node, current_count) do
     batch_count = Enum.reduce(entries, 0, fn entry, acc ->
       case entry do
-        [_cache_name, entry_key, expiration] ->
+        {entry_key, expiration} ->
           # Calculate remaining TTL
           ttl = case expiration do
             nil -> nil
