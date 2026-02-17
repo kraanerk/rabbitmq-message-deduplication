@@ -155,22 +155,34 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
       :rabbit_log.info("This node (~p) is the coordinator, syncing data to ~p~n",
                       [Node.self(), new_node])
 
-      # For each cache, rebalance (create tables) and sync data
+      # For each cache, create table on new node and sync data
       for cache <- caches do
-        # Rebalance creates the table on the new node
-        :rabbit_log.info("Rebalancing cache ~p for new node ~p~n", [cache, new_node])
-        Cache.rebalance_replicas(cache)
+        :rabbit_log.info("Creating cache ~p on new node ~p~n", [cache, new_node])
 
-        # Wait for table to be ready on the new node before syncing
-        case :rpc.call(new_node, Mnesia, :wait_for_tables, [[cache], 30000]) do
+        # Get cache configuration
+        distributed = Cache.cache_property(cache, :distributed)
+        size = Cache.cache_property(cache, :size)
+        ttl = Cache.cache_property(cache, :ttl)
+
+        # Create the cache table directly on the new node
+        case :rpc.call(new_node, Cache, :create_local_cache, [cache, distributed, [size: size, ttl: ttl]]) do
           :ok ->
-            :rabbit_log.info("Table ~p is ready on node ~p, starting sync~n", [cache, new_node])
-            # Sync existing data to the new node
-            sync_cache_to_node(cache, new_node)
-          {:timeout, _} ->
-            :rabbit_log.error("Timeout waiting for table ~p on node ~p~n", [cache, new_node])
+            :rabbit_log.info("Successfully created cache ~p on node ~p~n", [cache, new_node])
+
+            # Wait for table to be ready on the new node before syncing
+            case :rpc.call(new_node, Mnesia, :wait_for_tables, [[cache], 30000]) do
+              :ok ->
+                :rabbit_log.info("Table ~p is ready on node ~p, starting sync~n", [cache, new_node])
+                # Sync existing data to the new node
+                sync_cache_to_node(cache, new_node)
+              {:timeout, _} ->
+                :rabbit_log.error("Timeout waiting for table ~p on node ~p~n", [cache, new_node])
+              {:error, reason} ->
+                :rabbit_log.error("Error waiting for table ~p on node ~p: ~p~n", [cache, new_node, reason])
+            end
+
           {:error, reason} ->
-            :rabbit_log.error("Error waiting for table ~p on node ~p: ~p~n", [cache, new_node, reason])
+            :rabbit_log.error("Failed to create cache ~p on node ~p: ~p~n", [cache, new_node, reason])
         end
       end
     else

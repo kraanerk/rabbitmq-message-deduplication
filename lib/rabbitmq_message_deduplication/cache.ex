@@ -257,7 +257,8 @@ defmodule RabbitMQMessageDeduplication.Cache do
   end
 
   # Retrieve the given property from the Mnesia user_properties field
-  defp cache_property(cache, property) do
+  @doc false
+  def cache_property(cache, property) do
     cache |> Mnesia.table_info(:user_properties) |> Keyword.get(property)
   end
 
