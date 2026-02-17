@@ -19,6 +19,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
   alias :mnesia_rocksdb, as: MnesiaRocksdb
   alias :mnesia_rocksdb_admin, as: MrdbAdmin
   alias RabbitMQMessageDeduplication.Cache, as: Cache
+  alias RabbitMQMessageDeduplication.CacheEvent, as: CacheEvent
   alias RabbitMQMessageDeduplication.Common, as: Common
 
   Module.register_attribute(__MODULE__,
@@ -67,6 +68,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
   Disable the cache and terminate the manager process.
   """
   def disable() do
+    :ok = CacheEvent.remove_handler()
     {:ok, _node} = Mnesia.unsubscribe(:system)
     :ok = Supervisor.terminate_child(:rabbit_sup, __MODULE__)
     :ok = Supervisor.delete_child(:rabbit_sup, __MODULE__)
@@ -96,7 +98,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
          :ok <- mnesia_create(Mnesia.add_table_copy(caches(), node(), :ram_copies)),
          :ok <- Mnesia.wait_for_tables([caches()], Common.cache_wait_time()),
          {:ok, _node} <- Mnesia.subscribe(:system),
-         :ok <- :rabbit_event.subscribe(:node_up)
+         :ok <- CacheEvent.add_handler()
     do
       Process.send_after(__MODULE__, :cleanup, Common.cleanup_period())
       {:ok, state}
