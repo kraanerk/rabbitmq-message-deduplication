@@ -99,6 +99,36 @@ defmodule RabbitMQMessageDeduplication.Cache do
   end
 
   @doc """
+  Batch insert multiple entries into the local cache in a single transaction.
+  Entries should be a list of {entry_key, ttl} tuples.
+  """
+  @spec local_batch_insert(atom, list({any, integer | nil})) ::
+    { :ok, %{inserted: integer, exists: integer} } | { :error, any }
+  def local_batch_insert(cache, entries) do
+    RabbitLog.info("Batch insert on node ~p: cache=~p, count=~p",
+                    [Node.self(), cache, length(entries)])
+
+    function = fn ->
+      Enum.reduce(entries, %{inserted: 0, exists: 0}, fn {entry_key, ttl}, acc ->
+        if cache_member?(cache, entry_key) do
+          %{acc | exists: acc.exists + 1}
+        else
+          Mrdb.insert(cache, {cache, entry_key, entry_expiration(cache, ttl)})
+          %{acc | inserted: acc.inserted + 1}
+        end
+      end)
+    end
+
+    result = case Mrdb.activity(:tx, :rocksdb_copies, function) do
+      %{inserted: _, exists: _} = stats -> {:ok, stats}
+      {:aborted, reason} -> {:error, reason}
+    end
+
+    RabbitLog.info("Batch insert result on node ~p: ~p", [Node.self(), result])
+    result
+  end
+
+  @doc """
   Flush the cache content.
   """
   @spec flush(atom) :: :ok | { :error, any }

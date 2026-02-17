@@ -254,7 +254,8 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
 
   # Process and sync a batch of entries
   defp process_and_sync_batch(entries, cache, target_node, current_count) do
-    batch_count = Enum.reduce(entries, 0, fn entry, acc ->
+    # Collect valid entries with their TTLs
+    valid_entries = Enum.reduce(entries, [], fn entry, acc ->
       case entry do
         {entry_key, expiration} ->
           # Calculate remaining TTL
@@ -265,9 +266,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
 
           # Skip expired entries
           if ttl == nil or ttl > 0 do
-            # Use RPC to insert on the remote node
-            :rpc.cast(target_node, Cache, :local_insert, [cache, entry_key, ttl])
-            acc + 1
+            [{entry_key, ttl} | acc]
           else
             acc
           end
@@ -277,6 +276,12 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
       end
     end)
 
+    # Make one RPC call for the entire batch
+    unless Enum.empty?(valid_entries) do
+      :rpc.cast(target_node, __MODULE__, :batch_insert, [cache, Enum.reverse(valid_entries)])
+    end
+
+    batch_count = length(valid_entries)
     new_count = current_count + batch_count
 
     if rem(new_count, 10000) == 0 do
@@ -285,6 +290,23 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
     end
 
     new_count
+  end
+
+  @doc """
+  Batch insert multiple entries into a cache on the local node.
+  Called via RPC from the coordinator node during sync.
+  """
+  @spec batch_insert(atom, list({any, integer | nil})) :: :ok
+  def batch_insert(cache, entries) do
+    case Cache.local_batch_insert(cache, entries) do
+      {:ok, stats} ->
+        :rabbit_log.info("Batch insert completed for cache ~p: inserted=~p, exists=~p~n",
+                        [cache, stats.inserted, stats.exists])
+        :ok
+      {:error, reason} ->
+        :rabbit_log.error("Batch insert failed for cache ~p: ~p~n", [cache, reason])
+        :ok
+    end
   end
 
   def caches(), do: :message_deduplication_caches
