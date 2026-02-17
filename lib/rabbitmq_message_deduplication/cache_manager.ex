@@ -158,10 +158,20 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
       # For each cache, rebalance (create tables) and sync data
       for cache <- caches do
         # Rebalance creates the table on the new node
+        :rabbit_log.info("Rebalancing cache ~p for new node ~p~n", [cache, new_node])
         Cache.rebalance_replicas(cache)
 
-        # Sync existing data to the new node
-        sync_cache_to_node(cache, new_node)
+        # Wait for table to be ready on the new node before syncing
+        case :rpc.call(new_node, Mnesia, :wait_for_tables, [[cache], 30000]) do
+          :ok ->
+            :rabbit_log.info("Table ~p is ready on node ~p, starting sync~n", [cache, new_node])
+            # Sync existing data to the new node
+            sync_cache_to_node(cache, new_node)
+          {:timeout, _} ->
+            :rabbit_log.error("Timeout waiting for table ~p on node ~p~n", [cache, new_node])
+          {:error, reason} ->
+            :rabbit_log.error("Error waiting for table ~p on node ~p: ~p~n", [cache, new_node, reason])
+        end
       end
     else
       :rabbit_log.info("Node ~p is the coordinator, skipping sync from this node (~p)~n",
@@ -198,6 +208,16 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
     spawn(fn ->
       try do
         sync_cache_entries_batched(cache, target_node)
+
+        # Verify sync by checking table size on target node
+        case :rpc.call(target_node, :mrdb, :read_info, [cache, :size]) do
+          size when is_integer(size) ->
+            :rabbit_log.info("Sync verification: cache ~p on node ~p has ~p entries~n",
+                            [cache, target_node, size])
+          error ->
+            :rabbit_log.warning("Could not verify cache ~p size on node ~p: ~p~n",
+                               [cache, target_node, error])
+        end
       catch
         kind, reason ->
           :rabbit_log.error("Cache sync failed for ~p to node ~p: ~p:~p~n",
