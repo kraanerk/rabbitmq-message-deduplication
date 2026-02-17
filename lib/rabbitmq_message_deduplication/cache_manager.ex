@@ -19,7 +19,6 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
   alias :mnesia_rocksdb, as: MnesiaRocksdb
   alias :mnesia_rocksdb_admin, as: MrdbAdmin
   alias RabbitMQMessageDeduplication.Cache, as: Cache
-  alias RabbitMQMessageDeduplication.CacheEvent, as: CacheEvent
   alias RabbitMQMessageDeduplication.Common, as: Common
 
   Module.register_attribute(__MODULE__,
@@ -65,11 +64,17 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
   end
 
   @doc """
+  Called by rabbit_node_monitor when a node joins the cluster.
+  """
+  @spec on_node_up(atom) :: :ok
+  def on_node_up(node) do
+    GenServer.cast(__MODULE__, {:node_up, node})
+  end
+
+  @doc """
   Disable the cache and terminate the manager process.
   """
   def disable() do
-    :ok = CacheEvent.remove_handler()
-    {:ok, _node} = Mnesia.unsubscribe(:system)
     :ok = Supervisor.terminate_child(:rabbit_sup, __MODULE__)
     :ok = Supervisor.delete_child(:rabbit_sup, __MODULE__)
   end
@@ -96,8 +101,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
 
     with :ok <- mnesia_create(Mnesia.create_table(caches(), [])),
          :ok <- mnesia_create(Mnesia.add_table_copy(caches(), node(), :ram_copies)),
-         :ok <- Mnesia.wait_for_tables([caches()], Common.cache_wait_time()),
-         {:ok, _node} <- Mnesia.subscribe(:system)
+         :ok <- Mnesia.wait_for_tables([caches()], Common.cache_wait_time())
     do
       Process.send_after(__MODULE__, :cleanup, Common.cleanup_period())
       {:ok, state}
@@ -135,32 +139,9 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
     end
   end
 
-  # The maintenance process deletes expired cache entries.
-  def handle_info(:cleanup, state) do
-    {:atomic, caches} = Mnesia.transaction(fn -> Mnesia.all_keys(caches()) end)
-    Enum.each(caches, &Cache.delete_expired_entries/1)
-    Process.send_after(__MODULE__, :cleanup, Common.cleanup_period())
-
-    {:noreply, state}
-  end
-
-  # On node addition distribute cache tables (Mnesia event)
-  def handle_info({:mnesia_system_event, {:mnesia_up, node}}, state) do
-    :rabbit_log.info("Mnesia node ~p joined, rebalancing caches~n", [node])
-    {:atomic, caches} = Mnesia.transaction(fn -> Mnesia.all_keys(caches()) end)
-    Enum.each(caches, &Cache.rebalance_replicas/1)
-
-    {:noreply, state}
-  end
-
-  def handle_info({:mnesia_system_event, _event}, state) do
-    {:noreply, state}
-  end
-
-  # On RabbitMQ node addition (handles both Mnesia and Khepri-based clusters)
-  def handle_info({:event, :node_added, info, _timestamp}, state) do
-    new_node = Keyword.get(info, :node)
-    :rabbit_log.info("RabbitMQ node ~p joined cluster, rebalancing and syncing caches~n", [new_node])
+  # Handle node_up callback from rabbit_node_monitor
+  def handle_cast({:node_up, new_node}, state) do
+    :rabbit_log.info("Node ~p joined cluster, rebalancing and syncing caches~n", [new_node])
 
     # Get all caches from the Mnesia registry table
     {:atomic, caches} = Mnesia.transaction(fn -> Mnesia.all_keys(caches()) end)
@@ -192,6 +173,20 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
       end
     end
 
+    {:noreply, state}
+  end
+
+  # The maintenance process deletes expired cache entries.
+  def handle_info(:cleanup, state) do
+    {:atomic, caches} = Mnesia.transaction(fn -> Mnesia.all_keys(caches()) end)
+    Enum.each(caches, &Cache.delete_expired_entries/1)
+    Process.send_after(__MODULE__, :cleanup, Common.cleanup_period())
+
+    {:noreply, state}
+  end
+
+  # Catch-all for other info messages
+  def handle_info(_msg, state) do
     {:noreply, state}
   end
 
