@@ -118,6 +118,11 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
     with :ok <- Cache.create(cache, distributed, options),
          {:atomic, result} <- Mnesia.transaction(function)
     do
+      # Rebalance to ensure cache is created on all nodes in the cluster
+      if distributed do
+        :rabbit_log.info("Cache ~p created locally, rebalancing to other nodes~n", [cache])
+        Cache.rebalance_replicas(cache)
+      end
       {:reply, result, state}
     else
       {:aborted, reason} -> {:reply, {:error, reason}, state}
@@ -155,9 +160,9 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
       :rabbit_log.info("This node (~p) is the coordinator, syncing data to ~p~n",
                       [Node.self(), new_node])
 
-      # For each cache, create table on new node and sync data
+      # For each cache, rebalance replicas and sync data
       for cache <- caches do
-        :rabbit_log.info("Creating cache ~p on new node ~p~n", [cache, new_node])
+        :rabbit_log.info("Rebalancing and syncing cache ~p to new node ~p~n", [cache, new_node])
 
         # Get cache configuration
         distributed = Cache.cache_property(cache, :distributed)
@@ -191,11 +196,6 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
     else
       :rabbit_log.info("Node ~p is the coordinator, skipping sync from this node (~p)~n",
                       [coordinator, Node.self()])
-
-      # Still need to rebalance to ensure table creation
-      for cache <- caches do
-        Cache.rebalance_replicas(cache)
-      end
     end
 
     {:noreply, state}

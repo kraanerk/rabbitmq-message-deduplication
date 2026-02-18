@@ -205,6 +205,9 @@ defmodule RabbitMQMessageDeduplication.Cache do
 
   # Mnesia cache table creation.
   defp cache_create(cache, distributed, options) do
+    RabbitLog.info("Creating cache ~p on node ~p (distributed: ~p)~n",
+      [cache, Node.self(), distributed])
+
     persistence = :rocksdb_copies
     # RocksDB tables MUST be created locally on each node
     # They cannot be created with a replicas list
