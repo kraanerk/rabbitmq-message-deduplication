@@ -232,10 +232,18 @@ defmodule RabbitMQMessageDeduplication.Cache do
   end
 
   # Wait for the table to be loaded and force it in case of timeout
+  # For RocksDB tables, Mnesia sync is not required since they're local only
   defp wait_for_cache(cache) do
     case Mnesia.wait_for_tables([cache], Common.cache_wait_time()) do
-      {:timeout, [cache]} -> Mnesia.force_load_table(cache)
-      result -> result
+      {:timeout, [cache]} ->
+        Mnesia.force_load_table(cache)
+      {:aborted, {:node_not_running, _}} ->
+        # RocksDB table was created locally, Mnesia not fully ready yet
+        # This is OK for local tables
+        RabbitLog.info("Cache ~p created but Mnesia not ready, continuing anyway~n", [cache])
+        :ok
+      result ->
+        result
     end
   end
 
