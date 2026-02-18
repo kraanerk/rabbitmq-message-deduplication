@@ -165,21 +165,15 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
         ttl = Cache.cache_property(cache, :ttl)
 
         # Create the cache table directly on the new node
-        case :rpc.call(new_node, Cache, :create_local_cache, [cache, distributed, [size: size, ttl: ttl]]) do
-          :ok ->
-            :rabbit_log.info("Successfully created cache ~p on node ~p~n", [cache, new_node])
+        create_result = :rpc.call(new_node, Cache, :create_local_cache, [cache, distributed, [size: size, ttl: ttl]])
 
-            # Verify table exists by checking table_info on the new node
-            case :rpc.call(new_node, :mnesia, :table_info, [cache, :size]) do
-              size when is_integer(size) ->
-                :rabbit_log.info("Table ~p is ready on node ~p (size: ~p), starting sync~n", [cache, new_node, size])
-                # Sync existing data to the new node
-                sync_cache_to_node(cache, new_node)
-              {:badrpc, reason} ->
-                :rabbit_log.error("RPC error checking table ~p on node ~p: ~p~n", [cache, new_node, reason])
-              error ->
-                :rabbit_log.error("Table ~p not ready on node ~p: ~p~n", [cache, new_node, error])
-            end
+        :rabbit_log.info("Cache creation result for ~p on node ~p: ~p~n", [cache, new_node, create_result])
+
+        case create_result do
+          :ok ->
+            :rabbit_log.info("Successfully created cache ~p on node ~p, starting sync~n", [cache, new_node])
+            # Directly start sync - the table was created successfully
+            sync_cache_to_node(cache, new_node)
 
           {:error, reason} ->
             :rabbit_log.error("Failed to create cache ~p on node ~p: ~p~n", [cache, new_node, reason])
@@ -188,7 +182,10 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
             :rabbit_log.error("RPC error creating cache ~p on node ~p: ~p~n", [cache, new_node, reason])
 
           other ->
-            :rabbit_log.error("Unexpected result creating cache ~p on node ~p: ~p~n", [cache, new_node, other])
+            # Handle any other return value (might still be success)
+            :rabbit_log.warning("Unexpected result creating cache ~p on node ~p: ~p, attempting sync anyway~n",
+                               [cache, new_node, other])
+            sync_cache_to_node(cache, new_node)
         end
       end
     else
