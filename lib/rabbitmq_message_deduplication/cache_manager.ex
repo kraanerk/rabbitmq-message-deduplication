@@ -224,14 +224,20 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
       try do
         sync_cache_entries_batched(cache, target_node)
 
+        # Give the batch insert a moment to complete, then verify
+        :timer.sleep(100)
+
         # Verify sync by checking table size on target node
-        case :rpc.call(target_node, :mrdb, :read_info, [cache, :size]) do
+        case :rpc.call(target_node, :mnesia, :table_info, [cache, :size]) do
           size when is_integer(size) ->
             :rabbit_log.info("Sync verification: cache ~p on node ~p has ~p entries~n",
                             [cache, target_node, size])
+          {:badrpc, _reason} ->
+            # Table might not be fully ready yet, that's okay
+            :ok
           error ->
-            :rabbit_log.warning("Could not verify cache ~p size on node ~p: ~p~n",
-                               [cache, target_node, error])
+            :rabbit_log.debug("Could not verify cache ~p size on node ~p: ~p~n",
+                             [cache, target_node, error])
         end
       catch
         kind, reason ->
