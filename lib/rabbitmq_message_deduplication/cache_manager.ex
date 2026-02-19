@@ -134,10 +134,15 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
         end
         {:reply, result, state}
 
-      {:error, {:already_exists, caches()}} ->
+      {:error, {:already_exists, table}} ->
         # Cache already exists in registry, this is recovery - don't rebalance
-        :rabbit_log.info("Cache ~p already in registry (recovery), skipping rebalance~n", [cache])
-        {:reply, :ok, state}
+        caches_table = caches()
+        if table == caches_table do
+          :rabbit_log.info("Cache ~p already in registry (recovery), skipping rebalance~n", [cache])
+          {:reply, :ok, state}
+        else
+          {:reply, {:error, {:already_exists, table}}, state}
+        end
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
