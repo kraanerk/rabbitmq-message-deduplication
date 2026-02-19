@@ -270,6 +270,10 @@ defmodule RabbitMQMessageDeduplication.Cache do
 
   # Mnesia cache table creation.
   defp cache_create(cache, distributed, options) do
+    cache_create_with_retry(cache, distributed, options, 5, 200)
+  end
+
+  defp cache_create_with_retry(cache, distributed, options, retries_left, backoff_ms) do
     RabbitLog.info("Creating cache ~p on node ~p (distributed: ~p)~n",
       [cache, Node.self(), distributed])
 
@@ -277,21 +281,26 @@ defmodule RabbitMQMessageDeduplication.Cache do
     # RocksDB tables MUST be created locally on each node
     # They cannot be created with a replicas list
     replicas = [Node.self()]
-    options = [{:attributes, [:entry, :expiration]},
-               {persistence, replicas},
-               {:index, [:expiration]},
-               {:user_properties, [{:distributed, distributed},
-                                   {:size, Keyword.get(options, :size)},
-                                   {:ttl, Keyword.get(options, :ttl)},
-                                   {:rocksdb_opts, [{:max_open_files, 256*1024},
-                                                    {:block_size, 128*1024*1024}]}]}]
+    table_options = [{:attributes, [:entry, :expiration]},
+                     {persistence, replicas},
+                     {:index, [:expiration]},
+                     {:user_properties, [{:distributed, distributed},
+                                         {:size, Keyword.get(options, :size)},
+                                         {:ttl, Keyword.get(options, :ttl)},
+                                         {:rocksdb_opts, [{:max_open_files, 256*1024},
+                                                          {:block_size, 128*1024*1024}]}]}]
 
-    case Mnesia.create_table(cache, options) do
+    case Mnesia.create_table(cache, table_options) do
       {:atomic, :ok} ->
         wait_for_cache(cache)
       {:aborted, reason} when elem(reason, 0) == :already_exists ->
         RabbitLog.info("Cache ~p already exists on node ~p~n", [cache, Node.self()])
         maybe_reconfigure(cache, distributed)
+      {:aborted, {node_not_running, _node}} when retries_left > 0 ->
+        RabbitLog.info("Mnesia not ready for table creation, retrying in ~pms (retries left: ~p)~n",
+                       [backoff_ms, retries_left - 1])
+        :timer.sleep(backoff_ms)
+        cache_create_with_retry(cache, distributed, options, retries_left - 1, backoff_ms * 2)
       error ->
         RabbitLog.warning("Mnesia.create_table failed for cache ~p on node ~p: ~p~n", [cache, Node.self(), error])
         error
