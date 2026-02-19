@@ -33,6 +33,18 @@ defmodule RabbitMQMessageDeduplication.Cache do
   """
   @spec create(atom, boolean, list) :: :ok | { :error, any }
   def create(cache, distributed, options) do
+    with :ok <- do_cache_create(cache, distributed, options),
+         {:atomic, _} <- Mnesia.transaction(fn -> Mnesia.write({:message_deduplication_caches, cache, :nil}) end)
+    do
+      :ok
+    else
+      {:aborted, reason} -> {:error, reason}
+      {_, reason} -> {:error, reason}
+      error -> error
+    end
+  end
+
+  defp do_cache_create(cache, distributed, options) do
     case cache_create(cache, distributed, options) do
       {_, reason} -> {:error, reason}
       result -> result

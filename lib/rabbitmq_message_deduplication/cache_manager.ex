@@ -113,26 +113,16 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
 
   # Create the cache and add it to the Mnesia caches table
   def handle_call({:create, cache, distributed, options}, _from, state) do
-    function = fn -> Mnesia.write({caches(), cache, :nil}) end
-
-    result = with :ok <- Cache.create(cache, distributed, options),
-                  {:atomic, result} <- Mnesia.transaction(function)
-    do
-      {:ok, result}
-    else
-      {:aborted, reason} -> {:error, reason}
-      error -> error
-    end
+    result = Cache.create(cache, distributed, options)
 
     case result do
-      {:ok, result} ->
+      :ok ->
         # Rebalance to ensure cache is created on all nodes in the cluster
-        # Only rebalance if this is a truly new cache (not already registered)
-        if distributed and result == :ok do
+        if distributed do
           :rabbit_log.info("Cache ~p created locally, rebalancing to other nodes~n", [cache])
           Cache.rebalance_replicas(cache)
         end
-        {:reply, result, state}
+        {:reply, :ok, state}
 
       {:error, {:already_exists, table}} ->
         # Cache already exists in registry, this is recovery - don't rebalance
