@@ -58,8 +58,6 @@ defmodule RabbitMQMessageDeduplication.Cache do
 
     # Broadcast to other nodes if distributed
     distributed = cache_property(cache, :distributed)
-    RabbitLog.info("Cache ~p distributed flag: ~p", [cache, distributed])
-
     if result == {:ok, :inserted} and distributed do
       RabbitLog.info("Broadcasting insert for cache ~p to other nodes", [cache])
       broadcast_insert(cache, entry, ttl)

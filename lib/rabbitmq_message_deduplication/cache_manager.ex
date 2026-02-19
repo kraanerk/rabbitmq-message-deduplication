@@ -172,6 +172,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
 
     # Get all caches from the Mnesia registry table
     {:atomic, caches} = Mnesia.transaction(fn -> Mnesia.all_keys(caches()) end)
+    :rabbit_log.info("Caches: ~p~n", [caches])
 
     # Determine if this node should be the sync coordinator
     # Use the node with the smallest name (lexicographically) to avoid duplicate syncing
