@@ -333,9 +333,11 @@ defmodule RabbitMQMessageDeduplication.Cache do
 
       for node <- target_nodes do
         if node not in cache_nodes do
-          # Check if the cache already exists on the remote node by querying its table info
-          cache_exists = case :rpc.call(node, :mnesia, :table_info, [cache, :size]) do
+          # Check if the cache already exists on the remote node by querying mrdb
+          # mrdb.read_info returns :undefined if the table doesn't exist locally
+          cache_exists = case :rpc.call(node, :mrdb, :read_info, [cache, :size]) do
             {:badrpc, _} -> false
+            :undefined -> false
             size when is_integer(size) -> true
             _ -> false
           end
