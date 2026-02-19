@@ -61,27 +61,47 @@ defmodule RabbitMQMessageDeduplication.Cache do
   # Retry mechanism for cache registration
   defp register_cache_in_table_with_retry(caches_table, cache, retries_left, backoff_ms) do
     # Wait for the caches table to be ready
-    case Mnesia.wait_for_tables([caches_table], Common.cache_wait_time()) do
+    wait_result = Mnesia.wait_for_tables([caches_table], Common.cache_wait_time())
+
+    case wait_result do
       :ok ->
         attempt_register_cache(caches_table, cache, retries_left, backoff_ms)
       {:timeout, _} ->
         # If timeout, try anyway - the table might be available locally
         attempt_register_cache(caches_table, cache, retries_left, backoff_ms)
-      error -> error
+      {:error, {node_not_running, _node}} when retries_left > 0 ->
+        # Node not fully ready yet, wait and retry
+        RabbitLog.info("Mnesia not ready (wait_for_tables), retrying in ~pms (retries left: ~p)~n",
+                       [backoff_ms, retries_left - 1])
+        :timer.sleep(backoff_ms)
+        register_cache_in_table_with_retry(caches_table, cache, retries_left - 1, backoff_ms * 2)
+      {:aborted, {node_not_running, _node}} when retries_left > 0 ->
+        # Node not fully ready yet, wait and retry
+        RabbitLog.info("Mnesia not ready (wait_for_tables aborted), retrying in ~pms (retries left: ~p)~n",
+                       [backoff_ms, retries_left - 1])
+        :timer.sleep(backoff_ms)
+        register_cache_in_table_with_retry(caches_table, cache, retries_left - 1, backoff_ms * 2)
+      error ->
+        RabbitLog.warning("Failed to wait for caches table: ~p~n", [error])
+        error
     end
   end
 
   defp attempt_register_cache(caches_table, cache, retries_left, backoff_ms) do
-    case Mnesia.transaction(fn -> Mnesia.write({caches_table, cache, :nil}) end) do
+    transaction_result = Mnesia.transaction(fn -> Mnesia.write({caches_table, cache, :nil}) end)
+
+    case transaction_result do
       {:atomic, _} ->
+        RabbitLog.info("Successfully registered cache ~p in caches table~n", [cache])
         :ok
       {:aborted, {node_not_running, _node}} when retries_left > 0 ->
         # Node not fully ready yet, wait and retry
-        RabbitLog.info("Mnesia not ready for cache registration, retrying in ~pms (retries left: ~p)~n",
+        RabbitLog.info("Mnesia not ready for cache registration (node_not_running), retrying in ~pms (retries left: ~p)~n",
                        [backoff_ms, retries_left - 1])
         :timer.sleep(backoff_ms)
         register_cache_in_table_with_retry(caches_table, cache, retries_left - 1, backoff_ms * 2)
       {:aborted, reason} ->
+        RabbitLog.warning("Cache registration transaction aborted: ~p~n", [reason])
         {:error, reason}
     end
   end
@@ -273,6 +293,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
         RabbitLog.info("Cache ~p already exists on node ~p~n", [cache, Node.self()])
         maybe_reconfigure(cache, distributed)
       error ->
+        RabbitLog.warning("Mnesia.create_table failed for cache ~p on node ~p: ~p~n", [cache, Node.self(), error])
         error
     end
   end
