@@ -33,12 +33,13 @@ defmodule RabbitMQMessageDeduplication.Cache do
   """
   @spec create(atom, boolean, list) :: :ok | { :error, any }
   def create(cache, distributed, options) do
+    caches_table = :message_deduplication_caches
+
     with :ok <- do_cache_create(cache, distributed, options),
-         {:atomic, _} <- Mnesia.transaction(fn -> Mnesia.write({:message_deduplication_caches, cache, :nil}) end)
+         :ok <- register_cache_in_table(caches_table, cache)
     do
       :ok
     else
-      {:aborted, reason} -> {:error, reason}
       {_, reason} -> {:error, reason}
       error -> error
     end
@@ -48,6 +49,26 @@ defmodule RabbitMQMessageDeduplication.Cache do
     case cache_create(cache, distributed, options) do
       {_, reason} -> {:error, reason}
       result -> result
+    end
+  end
+
+  # Register the cache in the caches registry table
+  # Waits for the table to be available before writing
+  defp register_cache_in_table(caches_table, cache) do
+    # Wait for the caches table to be ready
+    case Mnesia.wait_for_tables([caches_table], Common.cache_wait_time()) do
+      :ok ->
+        case Mnesia.transaction(fn -> Mnesia.write({caches_table, cache, :nil}) end) do
+          {:atomic, _} -> :ok
+          {:aborted, reason} -> {:error, reason}
+        end
+      {:timeout, _} ->
+        # If timeout, try anyway - the table might be available locally
+        case Mnesia.transaction(fn -> Mnesia.write({caches_table, cache, :nil}) end) do
+          {:atomic, _} -> :ok
+          {:aborted, reason} -> {:error, reason}
+        end
+      error -> error
     end
   end
 
@@ -312,9 +333,20 @@ defmodule RabbitMQMessageDeduplication.Cache do
 
       for node <- target_nodes do
         if node not in cache_nodes do
-          RabbitLog.info("Creating cache ~p on remote node ~p~n", [cache, node])
-          # Call cache creation on the remote node via RPC
-          :rpc.call(node, __MODULE__, :create_local_cache, [cache, distributed, [size: size, ttl: ttl]])
+          # Check if the cache already exists on the remote node by querying its table info
+          cache_exists = case :rpc.call(node, :mnesia, :table_info, [cache, :size]) do
+            {:badrpc, _} -> false
+            size when is_integer(size) -> true
+            _ -> false
+          end
+
+          if cache_exists do
+            RabbitLog.info("Cache ~p already exists on remote node ~p, skipping creation~n", [cache, node])
+          else
+            RabbitLog.info("Creating cache ~p on remote node ~p~n", [cache, node])
+            # Call cache creation on the remote node via RPC
+            :rpc.call(node, __MODULE__, :create_local_cache, [cache, distributed, [size: size, ttl: ttl]])
+          end
         end
       end
     else
@@ -332,6 +364,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
   @doc """
   Create a local RocksDB cache table on the current node.
   This is meant to be called via RPC from other nodes.
+  Also registers the cache in the local caches registry table.
   """
   @spec create_local_cache(atom, boolean, list) :: :ok | {:error, any}
   def create_local_cache(cache, distributed, options) do
@@ -341,7 +374,8 @@ defmodule RabbitMQMessageDeduplication.Cache do
     # Filter out nil values from options
     options = Enum.filter(options, fn {_k, v} -> v != nil end)
 
-    case cache_create(cache, distributed, options) do
+    # Use create to both create the cache and register it in the caches table
+    case create(cache, distributed, options) do
       {:error, reason} ->
         RabbitLog.warning("Failed to create local cache ~p: ~p~n", [cache, reason])
         {:error, reason}
