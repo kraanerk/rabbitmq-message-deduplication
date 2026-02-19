@@ -223,6 +223,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
       {:atomic, :ok} ->
         wait_for_cache(cache)
       {:aborted, reason} when elem(reason, 0) == :already_exists ->
+        RabbitLog.info("Cache ~p already exists on node ~p~n", [cache, Node.self()])
         maybe_reconfigure(cache, distributed)
       error ->
         error
