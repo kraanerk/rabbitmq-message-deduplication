@@ -119,7 +119,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
       :ok ->
         # Rebalance to ensure cache is created on all nodes in the cluster
         if distributed do
-          :rabbit_log.info("Cache ~p created locally, rebalancing to other nodes~n", [cache])
+          :rabbit_log.debug("Cache ~p created locally, rebalancing to other nodes~n", [cache])
           Cache.rebalance_replicas(cache)
         end
         {:reply, :ok, state}
@@ -128,7 +128,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
         # Cache already exists in registry, this is recovery - don't rebalance
         caches_table = caches()
         if table == caches_table do
-          :rabbit_log.info("Cache ~p already in registry (recovery), skipping rebalance~n", [cache])
+          :rabbit_log.debug("Cache ~p already in registry (recovery), skipping rebalance~n", [cache])
           {:reply, :ok, state}
         else
           {:reply, {:error, {:already_exists, table}}, state}
@@ -162,7 +162,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
 
     # Get all caches from the Mnesia registry table
     {:atomic, caches} = Mnesia.transaction(fn -> Mnesia.all_keys(caches()) end)
-    :rabbit_log.info("Caches: ~p~n", [caches])
+    :rabbit_log.debug("Caches: ~p~n", [caches])
 
     # Determine if this node should be the sync coordinator
     # Use the node with the smallest name (lexicographically) to avoid duplicate syncing
@@ -175,7 +175,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
 
       # For each cache, rebalance replicas and sync data
       for cache <- caches do
-        :rabbit_log.info("Rebalancing and syncing cache ~p to new node ~p~n", [cache, new_node])
+        :rabbit_log.debug("Rebalancing and syncing cache ~p to new node ~p~n", [cache, new_node])
 
         # Get cache configuration
         distributed = Cache.cache_property(cache, :distributed)
@@ -185,11 +185,11 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
         # Create the cache table directly on the new node
         create_result = :rpc.call(new_node, Cache, :create_local_cache, [cache, distributed, [size: size, ttl: ttl]])
 
-        :rabbit_log.info("Cache creation result for ~p on node ~p: ~p~n", [cache, new_node, create_result])
+        :rabbit_log.debug("Cache creation result for ~p on node ~p: ~p~n", [cache, new_node, create_result])
 
         case create_result do
           :ok ->
-            :rabbit_log.info("Successfully created cache ~p on node ~p, starting sync~n", [cache, new_node])
+            :rabbit_log.debug("Successfully created cache ~p on node ~p, starting sync~n", [cache, new_node])
             # Directly start sync - the table was created successfully
             sync_cache_to_node(cache, new_node)
 
@@ -230,7 +230,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
 
   # Sync all cache entries from this node to the target node in batches
   defp sync_cache_to_node(cache, target_node) do
-    :rabbit_log.info("Syncing cache ~p to new node ~p~n", [cache, target_node])
+    :rabbit_log.debug("Syncing cache ~p to new node ~p~n", [cache, target_node])
 
     # Spawn a separate process to handle syncing to avoid blocking
     spawn(fn ->
@@ -243,7 +243,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
         # Verify sync by checking table size on target node using mrdb
         case :rpc.call(target_node, :mrdb, :read_info, [cache, :size]) do
           size when is_integer(size) ->
-            :rabbit_log.info("Sync verification: cache ~p on node ~p has ~p entries~n",
+            :rabbit_log.debug("Sync verification: cache ~p on node ~p has ~p entries~n",
                             [cache, target_node, size])
           {:badrpc, _reason} ->
             # Table might not be fully ready yet, that's okay
@@ -342,7 +342,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
     new_count = current_count + batch_count
 
     if rem(new_count, 10000) == 0 do
-      :rabbit_log.info("Synced ~p entries so far for cache ~p to node ~p~n",
+      :rabbit_log.debug("Synced ~p entries so far for cache ~p to node ~p~n",
                       [new_count, cache, target_node])
     end
 
@@ -357,7 +357,7 @@ defmodule RabbitMQMessageDeduplication.CacheManager do
   def batch_insert(cache, entries) do
     case Cache.local_batch_insert(cache, entries) do
       {:ok, stats} ->
-        :rabbit_log.info("Batch insert completed for cache ~p: inserted=~p, exists=~p~n",
+        :rabbit_log.debug("Batch insert completed for cache ~p: inserted=~p, exists=~p~n",
                         [cache, stats.inserted, stats.exists])
         :ok
       {:error, reason} ->

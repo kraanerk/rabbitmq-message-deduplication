@@ -116,17 +116,17 @@ defmodule RabbitMQMessageDeduplication.Cache do
   @spec insert(atom, any, integer | nil) ::
     { :ok, :inserted | :exists } | { :error, any }
   def insert(cache, entry, ttl \\ nil) do
-    RabbitLog.info("Cache insert on node ~p: cache=~p, entry=~p, ttl=~p",
+    RabbitLog.debug("Cache insert on node ~p: cache=~p, entry=~p, ttl=~p",
                     [Node.self(), cache, entry, ttl])
 
     result = local_insert(cache, entry, ttl)
 
-    RabbitLog.info("Cache insert result on node ~p: ~p", [Node.self(), result])
+    RabbitLog.debug("Cache insert result on node ~p: ~p", [Node.self(), result])
 
     # Broadcast to other nodes if distributed
     distributed = cache_property(cache, :distributed)
     if result == {:ok, :inserted} and distributed do
-      RabbitLog.info("Broadcasting insert for cache ~p to other nodes", [cache])
+      RabbitLog.debug("Broadcasting insert for cache ~p to other nodes", [cache])
       broadcast_insert(cache, entry, ttl)
     end
 
@@ -139,15 +139,15 @@ defmodule RabbitMQMessageDeduplication.Cache do
   @spec local_insert(atom, any, integer | nil) ::
     { :ok, :inserted | :exists } | { :error, any }
   def local_insert(cache, entry, ttl \\ nil) do
-    RabbitLog.info("Local insert on node ~p: cache=~p, entry=~p, ttl=~p",
+    RabbitLog.debug("Local insert on node ~p: cache=~p, entry=~p, ttl=~p",
                     [Node.self(), cache, entry, ttl])
 
     function = fn ->
       if cache_member?(cache, entry) do
-        RabbitLog.info("Entry already exists in cache ~p on node ~p", [cache, Node.self()])
+        RabbitLog.debug("Entry already exists in cache ~p on node ~p", [cache, Node.self()])
         :exists
       else
-        RabbitLog.info("Inserting new entry into cache ~p on node ~p", [cache, Node.self()])
+        RabbitLog.debug("Inserting new entry into cache ~p on node ~p", [cache, Node.self()])
         Mrdb.insert(cache, {cache, entry, entry_expiration(cache, ttl)})
         :inserted
       end
@@ -159,7 +159,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
       {:aborted, reason} -> {:error, reason}
     end
 
-    RabbitLog.info("Local insert result on node ~p: ~p", [Node.self(), result])
+    RabbitLog.debug("Local insert result on node ~p: ~p", [Node.self(), result])
     result
   end
 
@@ -170,7 +170,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
   @spec local_batch_insert(atom, list({any, integer | nil})) ::
     { :ok, %{inserted: integer, exists: integer} } | { :error, any }
   def local_batch_insert(cache, entries) do
-    RabbitLog.info("Batch insert on node ~p: cache=~p, count=~p",
+    RabbitLog.debug("Batch insert on node ~p: cache=~p, count=~p",
                     [Node.self(), cache, length(entries)])
 
     function = fn ->
@@ -189,7 +189,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
       {:aborted, reason} -> {:error, reason}
     end
 
-    RabbitLog.info("Batch insert result on node ~p: ~p", [Node.self(), result])
+    RabbitLog.debug("Batch insert result on node ~p: ~p", [Node.self(), result])
     result
   end
 
@@ -426,7 +426,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
         RabbitLog.warning("Failed to create local cache ~p: ~p~n", [cache, reason])
         {:error, reason}
       result ->
-        RabbitLog.info("Successfully created local cache ~p on node ~p~n", [cache, Node.self()])
+        RabbitLog.debug("Successfully created local cache ~p on node ~p~n", [cache, Node.self()])
         result
     end
   end
@@ -435,7 +435,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
   defp broadcast_insert(cache, entry, ttl) do
     {storage_type, cache_nodes} = cache_layout(cache)
 
-    RabbitLog.info("Broadcast insert: storage_type=~p, cache_nodes=~p~n",
+    RabbitLog.debug("Broadcast insert: storage_type=~p, cache_nodes=~p~n",
                    [storage_type, cache_nodes])
 
     if storage_type == :rocksdb_copies do
@@ -444,10 +444,10 @@ defmodule RabbitMQMessageDeduplication.Cache do
       target_nodes = cache_replicas(cache_nodes)
       other_nodes = target_nodes -- [Node.self()]
 
-      RabbitLog.info("Broadcasting insert to other nodes: ~p~n", [other_nodes])
+      RabbitLog.debug("Broadcasting insert to other nodes: ~p~n", [other_nodes])
 
       for node <- other_nodes do
-        RabbitLog.info("Casting insert to node ~p for cache ~p~n", [node, cache])
+        RabbitLog.debug("Casting insert to node ~p for cache ~p~n", [node, cache])
         :rpc.cast(node, __MODULE__, :local_insert, [cache, entry, ttl])
       end
     end
@@ -467,7 +467,7 @@ defmodule RabbitMQMessageDeduplication.Cache do
     # Return all cluster nodes, prioritizing existing cache nodes first
     result = cache_nodes ++ (cluster_nodes -- cache_nodes)
 
-    RabbitLog.info("cache_replicas result: ~p~n", [result])
+    RabbitLog.debug("cache_replicas result: ~p~n", [result])
 
     result
   end
